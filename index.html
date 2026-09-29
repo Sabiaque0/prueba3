@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reproductor IPTV</title>
+  <!-- Video.js para soporte HLS / m3u8 -->
+  <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
+  <script src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; background-color: #121212; color: #fff; padding: 15px; }
+    h2 { margin-bottom: 15px; text-align: center; color: #00adb5; }
+    
+    .input-section { margin-bottom: 15px; display: flex; flex-direction: column; gap: 10px; }
+    input[type="text"] { width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #333; background: #222; color: #fff; }
+    button { padding: 10px; border: none; background-color: #00adb5; color: white; font-weight: bold; border-radius: 5px; cursor: pointer; }
+    button:active { background-color: #00787d; }
+
+    .player-container { margin-bottom: 15px; width: 100%; height: 210px; background: #000; border-radius: 8px; overflow: hidden; }
+    .video-js { width: 100%; height: 100%; }
+
+    .channel-list { max-height: 350px; overflow-y: auto; background: #1e1e1e; border-radius: 8px; padding: 5px; }
+    .channel-item { padding: 12px; border-bottom: 1px solid #2a2a2a; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
+    .channel-item:hover { background: #333; }
+    .channel-item:last-child { border-bottom: none; }
+    .channel-name { font-size: 14px; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h2>Reproductor IPTV</h2>
+
+  <div class="input-section">
+    <input type="text" id="m3uUrl" placeholder="Pega el enlace URL de tu lista .m3u / .m3u8">
+    <button onclick="loadList()">Cargar Canales</button>
+  </div>
+
+  <div class="player-container">
+    <video id="iptvPlayer" class="video-js vjs-default-skin" controls preload="auto"></video>
+  </div>
+
+  <div class="channel-list" id="channelList">
+    <div style="padding: 15px; text-align: center; color: #888;">Introduce una URL m3u para desglosar la lista de canales.</div>
+  </div>
+
+  <script>
+    let player = videojs('iptvPlayer');
+
+    function loadList() {
+      const url = document.getElementById('m3uUrl').value.trim();
+      if (!url) {
+        alert("Por favor, introduce una URL m3u válida.");
+        return;
+      }
+
+      fetch(url)
+        .then(response => {
+          if (!response.ok) throw new Error("No se pudo descargar la lista");
+          return response.text();
+        })
+        .then(data => parseM3U(data))
+        .catch(err => {
+          alert("Error al cargar la lista IPTV: Asegúrate de que el servidor admita CORS o revisa el enlace.");
+          console.error(err);
+        });
+    }
+
+    function parseM3U(m3uContent) {
+      const lines = m3uContent.split('\n');
+      const channels = [];
+      let currentChannel = null;
+
+      lines.forEach(line => {
+        line = line.trim();
+        if (line.startsWith('#EXTINF:')) {
+          const nameParts = line.split(',');
+          const name = nameParts.length > 1 ? nameParts.slice(1).join(',') : 'Canal sin nombre';
+          currentChannel = { name: name };
+        } else if (line && !line.startsWith('#')) {
+          if (currentChannel) {
+            currentChannel.url = line;
+            channels.push(currentChannel);
+            currentChannel = null;
+          }
+        }
+      });
+
+      renderChannels(channels);
+    }
+
+    function renderChannels(channels) {
+      const listContainer = document.getElementById('channelList');
+      listContainer.innerHTML = '';
+
+      if (channels.length === 0) {
+        listContainer.innerHTML = '<div style="padding: 15px; text-align: center;">No se encontraron canales.</div>';
+        return;
+      }
+
+      channels.forEach(channel => {
+        const item = document.createElement('div');
+        item.className = 'channel-item';
+        item.innerHTML = `<span class="channel-name">${channel.name}</span>`;
+        item.onclick = () => playChannel(channel.url);
+        listContainer.appendChild(item);
+      });
+    }
+
+    function playChannel(url) {
+      player.src({
+        src: url,
+        type: 'application/x-mpegURL'
+      });
+      player.play();
+    }
+  </script>
+</body>
+</html>
