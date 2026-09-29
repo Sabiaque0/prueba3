@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Reproductor IPTV</title>
-  <!-- Video.js para soporte HLS / m3u8 -->
   <link href="https://vjs.zencdn.net/7.20.3/video-js.css" rel="stylesheet" />
   <script src="https://vjs.zencdn.net/7.20.3/video.min.js"></script>
   <style>
@@ -20,6 +19,8 @@
     .player-container { margin-bottom: 15px; width: 100%; height: 210px; background: #000; border-radius: 8px; overflow: hidden; }
     .video-js { width: 100%; height: 100%; }
 
+    .status-msg { text-align: center; color: #ffb703; font-size: 14px; margin-bottom: 10px; display: none; }
+
     .channel-list { max-height: 350px; overflow-y: auto; background: #1e1e1e; border-radius: 8px; padding: 5px; }
     .channel-item { padding: 12px; border-bottom: 1px solid #2a2a2a; cursor: pointer; display: flex; align-items: center; justify-content: space-between; }
     .channel-item:hover { background: #333; }
@@ -32,56 +33,95 @@
   <h2>Reproductor IPTV</h2>
 
   <div class="input-section">
-    <input type="text" id="m3uUrl" placeholder="Pega el enlace URL de tu lista .m3u / .m3u8">
+    <input type="text" id="m3uUrl" placeholder="Pega la URL de la lista .m3u / .m3u8">
     <button onclick="loadList()">Cargar Canales</button>
   </div>
+
+  <div id="status" class="status-msg">Cargando lista...</div>
 
   <div class="player-container">
     <video id="iptvPlayer" class="video-js vjs-default-skin" controls preload="auto"></video>
   </div>
 
   <div class="channel-list" id="channelList">
-    <div style="padding: 15px; text-align: center; color: #888;">Introduce una URL m3u para desglosar la lista de canales.</div>
+    <div style="padding: 15px; text-align: center; color: #888;">Introduce una URL m3u para desglosar los canales.</div>
   </div>
 
   <script>
     let player = videojs('iptvPlayer');
 
-    function loadList() {
-      const url = document.getElementById('m3uUrl').value.trim();
-      if (!url) {
-        alert("Por favor, introduce una URL m3u válida.");
+    async function fetchWithFallback(url) {
+      const statusEl = document.getElementById('status');
+      
+      // Intento 1: Descarga directa
+      try {
+        statusEl.innerText = "Intentando descarga directa...";
+        statusEl.style.display = "block";
+        const res = await fetch(url);
+        if (res.ok) return await res.text();
+      } catch (e) {
+        console.warn("Fallo descarga directa, intentando con proxy CORS...");
+      }
+
+      // Intento 2: Proxy CORS (corsproxy.io)
+      try {
+        statusEl.innerText = "Cargando mediante Proxy CORS...";
+        const proxyUrl = "https://corsproxy.io/?" + encodeURIComponent(url);
+        const res = await fetch(proxyUrl);
+        if (res.ok) return await res.text();
+      } catch (e) {
+        console.warn("Fallo proxy 1, intentando proxy secundario...");
+      }
+
+      // Intento 3: Proxy secundario (allorigins)
+      try {
+        statusEl.innerText = "Cargando mediante Proxy secundario...";
+        const proxyUrl2 = "https://api.allorigins.win/raw?url=" + encodeURIComponent(url);
+        const res = await fetch(proxyUrl2);
+        if (res.ok) return await res.text();
+      } catch (e) {
+        throw new Error("No se pudo obtener la lista con ningún método.");
+      }
+    }
+
+    async function loadList() {
+      const rawUrl = document.getElementById('m3uUrl').value.trim();
+      const statusEl = document.getElementById('status');
+
+      if (!rawUrl) {
+        alert("Introduce una URL M3U válida.");
         return;
       }
 
-      fetch(url)
-        .then(response => {
-          if (!response.ok) throw new Error("No se pudo descargar la lista");
-          return response.text();
-        })
-        .then(data => parseM3U(data))
-        .catch(err => {
-          alert("Error al cargar la lista IPTV: Asegúrate de que el servidor admita CORS o revisa el enlace.");
-          console.error(err);
-        });
+      try {
+        const textData = await fetchWithFallback(rawUrl);
+        statusEl.style.display = "none";
+        parseM3U(textData);
+      } catch (err) {
+        statusEl.style.display = "none";
+        alert("Error al cargar la lista. Verifica la URL o que el enlace no requiera usuario/contraseña bloqueado.");
+        console.error(err);
+      }
     }
 
     function parseM3U(m3uContent) {
-      const lines = m3uContent.split('\n');
+      const lines = m3uContent.split(/\r?\n/);
       const channels = [];
-      let currentChannel = null;
+      let currentName = null;
 
       lines.forEach(line => {
         line = line.trim();
         if (line.startsWith('#EXTINF:')) {
-          const nameParts = line.split(',');
-          const name = nameParts.length > 1 ? nameParts.slice(1).join(',') : 'Canal sin nombre';
-          currentChannel = { name: name };
+          const commaIdx = line.indexOf(',');
+          if (commaIdx !== -1) {
+            currentName = line.substring(commaIdx + 1).trim();
+          } else {
+            currentName = "Canal sin nombre";
+          }
         } else if (line && !line.startsWith('#')) {
-          if (currentChannel) {
-            currentChannel.url = line;
-            channels.push(currentChannel);
-            currentChannel = null;
+          if (currentName) {
+            channels.push({ name: currentName, url: line });
+            currentName = null;
           }
         }
       });
@@ -94,7 +134,7 @@
       listContainer.innerHTML = '';
 
       if (channels.length === 0) {
-        listContainer.innerHTML = '<div style="padding: 15px; text-align: center;">No se encontraron canales.</div>';
+        listContainer.innerHTML = '<div style="padding: 15px; text-align: center;">No se encontraron canales en el archivo.</div>';
         return;
       }
 
@@ -112,7 +152,9 @@
         src: url,
         type: 'application/x-mpegURL'
       });
-      player.play();
+      player.play().catch(e => {
+        alert("No se pudo reproducir este canal. Es posible que la señal esté caída o use un protocolo no compatible.");
+      });
     }
   </script>
 </body>
